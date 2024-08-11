@@ -1,0 +1,255 @@
+# Reading the input
+import numpy as np
+def read_csv(csv_path):
+    
+    np_path_XYs = np.genfromtxt(csv_path, delimiter=',')
+    path_XYs = []
+    for i in np.unique(np_path_XYs[:, 0]):
+        npXYs = np_path_XYs[np_path_XYs[:, 0] == i][:, 1:]
+        XYs = []
+        for j in np.unique(npXYs[:, 0]):
+            XY = npXYs[npXYs[:, 0] == j][:, 1:]
+            XYs.append(XY)
+        path_XYs.append(XYs)
+    return path_XYs
+
+#Visualization of Input
+import numpy as np
+import matplotlib.pyplot as plt
+def plot(paths_XYs):
+    fig, ax = plt.subplots(tight_layout=True, figsize=(8, 8))
+    for i, XYs in enumerate(path_XYs):
+        c = colours[i % len(colours)]
+        for XY in XYs:
+            ax.plot(XY[:, 0], XY[:, 1], c=c, linewidth=2)
+    ax.set_aspect('equal')
+    plt.show()
+
+import numpy as np
+from scipy.optimize import minimize
+from svgwrite import Drawing
+
+def distance(p1, p2):
+    #Calculating the distance between two points.
+    return np.linalg.norm(p1 - p2)
+
+def angle_between(v1, v2):
+    #Calculatin the angle between two lines
+    cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
+    return np.arccos(np.clip(cos_angle, -1.0, 1.0))
+
+def is_close(a, b, tolerance=1e-5):
+    #Verifying the tolerance
+    return np.abs(a - b) < tolerance
+
+#Straight line:
+def is_straight_line(points, tolerance=1e-5):
+    #Check if a sequence of points forms a straight line.
+    if len(points) < 3:
+        return True
+    direction = points[1] - points[0]
+    for i in range(2, len(points)):
+        if not is_close(np.cross(direction, points[i] - points[0]), 0, tolerance):
+            return False
+    return True
+
+#Circle and Ellipse
+def fit_circle(points, tolerance=1e-5):
+    #Fitting a circle to the points using least squares.
+    x, y = points[:, 0], points[:, 1]
+    A = np.c_[x, y, np.ones(points.shape[0])]
+    b = x**2 + y**2
+    c, _, _, _ = np.linalg.lstsq(A, b, rcond=None)
+    center_x, center_y = c[0] / 2, c[1] / 2
+    radius = np.sqrt(c[2] + (center_x**2 + center_y**2))
+    
+    # Validate the fit
+    distances = np.sqrt((x - center_x)**2 + (y - center_y)**2)
+    return is_close(np.std(distances), 0, tolerance)
+
+#Rectangle and Rounded Rectangle Detection
+def is_rectangle(points, tolerance=1e-5):
+    #Check for rectangle
+    if len(points) != 4:
+        return False
+    
+    side_lengths = [distance(points[i], points[(i + 1) % 4]) for i in range(4)]
+    diagonal_lengths = [distance(points[i], points[(i + 2) % 4]) for i in range(2)]
+    
+    sides_equal = is_close(side_lengths[0], side_lengths[2], tolerance) and is_close(side_lengths[1], side_lengths[3], tolerance)
+    diagonals_equal = is_close(diagonal_lengths[0], diagonal_lengths[1], tolerance)
+    
+    return sides_equal and diagonals_equal
+
+#Regular polygon detection
+def is_regular_polygon(points, tolerance=1e-5):
+    #check for polygon
+    n = len(points)
+    if n < 3:
+        return False
+    
+    side_lengths = [distance(points[i], points[(i + 1) % n]) for i in range(n)]
+    angles = [angle_between(points[(i + 1) % n] - points[i], points[(i + 2) % n] - points[(i + 1) % n]) for i in range(n)]
+    
+    sides_equal = np.allclose(side_lengths, side_lengths[0], atol=tolerance)
+    angles_equal = np.allclose(angles, angles[0], atol=tolerance)
+    
+    return sides_equal and angles_equal
+
+#Star shape detection
+def is_star_shape(points, tolerance=1e-5):
+    #check for star
+    center = np.mean(points, axis=0)
+    vectors = points - center
+    radii = np.linalg.norm(vectors, axis=1)
+    
+    # Check if radii alternate between large and small (for a star shape)
+    radii_diff = np.diff(radii)
+    alternating_radii = np.all(radii_diff[::2] * radii_diff[1::2] < 0)
+    
+    return alternating_radii and np.std(radii) > tolerance
+
+#Polyline to Bezier curve completion
+def fit_bezier(points):
+    def bezier(t, p0, p1, p2, p3):
+        return ((1 - t)**3 * p0 +
+                3 * (1 - t)**2 * t * p1 +
+                3 * (1 - t) * t**2 * p2 +
+                t**3 * p3)
+    
+    def loss(ctrl_points):
+        ctrl_points = ctrl_points.reshape((4, 2))
+        t_vals = np.linspace(0, 1, len(points))
+        bezier_points = np.array([bezier(t, *ctrl_points) for t in t_vals])
+        return np.sum(np.linalg.norm(bezier_points - points, axis=1))
+    
+    # Initial guess for control points (linear interpolation)
+    ctrl_points_init = np.linspace(points[0], points[-1], 4)
+    result = minimize(loss, ctrl_points_init.flatten(), method='L-BFGS-B')
+    return result.x.reshape((4, 2))
+
+#Symmetry Detection
+def is_symmetric(points, tolerance=1e-5):
+    center = np.mean(points, axis=0)
+    mirrored_points = 2 * center - points
+    
+    sorted_points = np.sort(points, axis=0)
+    sorted_mirrored = np.sort(mirrored_points, axis=0)
+    
+    return np.allclose(sorted_points, sorted_mirrored, atol=tolerance)
+
+#SVG Visualisation
+def bezier_to_svg(dwg, bezier_control_points):
+    p0, p1, p2, p3 = bezier_control_points
+    path_data = f'M {p0[0]} {p0[1]} C {p1[0]} {p1[1]}, {p2[0]} {p2[1]}, {p3[0]} {p3[1]}'
+    path = dwg.path(d=path_data, stroke='black', fill='none')
+    return path
+
+def save_svg(bezier_curves, filename='output.svg'):
+    dwg = Drawing(filename, profile='tiny')
+    for bezier_control_points in bezier_curves:
+        path = bezier_to_svg(dwg, bezier_control_points)
+        dwg.add(path)
+    dwg.save()
+
+#Main pipeline
+def process_shape(points):
+    if is_straight_line(points):
+        print("Shape: Straight Line")
+    elif is_rectangle(points):
+        print("Shape: Rectangle")
+    elif fit_circle(points):
+        print("Shape: Circle")
+    elif is_regular_polygon(points):
+        print("Shape: Regular Polygon")
+    elif is_star_shape(points):
+        print("Shape: Star")
+    elif is_symmetric(points):
+        print("Shape: Symmetric")
+    else:
+        print("Shape: Irregular")
+    
+    # Convert to Bézier curves
+    bezier_curves = [fit_bezier(points)]
+    return bezier_curves
+
+#Reflection Symmetry Detection
+import numpy as np
+
+def find_line_of_symmetry(points, tolerance=1e-5):
+    n = len(points)
+    center = np.mean(points, axis=0)
+    
+    # Test potential symmetry lines: the median between pairs of opposite points
+    for i in range(n // 2):
+        mid_point = (points[i] + points[n - i - 1]) / 2
+        
+        # Calculate the vector perpendicular to the line between opposite points
+        symmetry_line_dir = points[n - i - 1] - points[i]
+        perp_vector = np.array([-symmetry_line_dir[1], symmetry_line_dir[0]])
+        
+        # Normalize the perpendicular vector
+        perp_vector = perp_vector / np.linalg.norm(perp_vector)
+        
+        # Check if all other points are reflected across the line
+        reflected_points = points - mid_point
+        projections = np.dot(reflected_points, perp_vector[:, None]) * perp_vector[None, :]
+        reflected_points_on_line = reflected_points - 2 * projections
+        
+        # Reconstruct points from their reflected counterparts
+        reconstructed_points = mid_point + reflected_points_on_line
+        
+        if np.allclose(points, reconstructed_points[::-1], atol=tolerance):
+            return mid_point, perp_vector
+    
+    return None, None
+
+#Symmetric Bezier curve fitting
+from scipy.optimize import minimize
+
+def fit_symmetric_bezier(points, symmetry_point, symmetry_vector):
+    def bezier(t, p0, p1, p2, p3):
+        return (1 - t)**3 * p0 + 3 * (1 - t)**2 * t * p1 + 3 * (1 - t) * t**2 * p2 + t**3 * p3
+    
+    def loss(ctrl_points):
+        ctrl_points = ctrl_points.reshape((4, 2))
+        t_vals = np.linspace(0, 1, len(points))
+        bezier_points = np.array([bezier(t, *ctrl_points) for t in t_vals])
+        return np.sum(np.linalg.norm(bezier_points - points, axis=1))
+    
+    # Separate points into two halves based on symmetry
+    n = len(points)
+    points_1 = points[:n//2]
+    points_2 = points[n//2:]
+    
+    # Fit Bézier curves to each half
+    ctrl_points_initial_1 = np.linspace(points_1[0], points_1[-1], 4)
+    result_1 = minimize(loss, ctrl_points_initial_1.flatten(), method='L-BFGS-B')
+    bezier_curve_1 = result_1.x.reshape((4, 2))
+    
+    # Reflect control points for the second curve
+    reflection_matrix = np.eye(2) - 2 * np.outer(symmetry_vector, symmetry_vector) / np.dot(symmetry_vector, symmetry_vector)
+    bezier_curve_2 = np.dot(bezier_curve_1 - symmetry_point, reflection_matrix) + symmetry_point
+    
+    return bezier_curve_1, bezier_curve_2
+
+#SVG Visualisation
+from svgwrite import Drawing
+
+def bezier_to_svg(dwg, bezier_control_points, color='black'):
+    p0, p1, p2, p3 = bezier_control_points
+    path_data = f'M {p0[0]} {p0[1]} C {p1[0]} {p1[1]}, {p2[0]} {p2[1]}, {p3[0]} {p3[1]}'
+    path = dwg.path(d=path_data, stroke=color, fill='none')
+    return path
+
+def save_symmetric_svg(bezier_curves, filename='symmetric_output.svg'):
+    dwg = Drawing(filename, profile='tiny')
+    colors = ['black', 'red']  # Different colors for visual distinction
+    for curve, color in zip(bezier_curves, colors):
+        path = bezier_to_svg(dwg, curve, color=color)
+        dwg.add(path)
+    dwg.save()
+
+#Processing
+points = read_csv("frag0.csv")
+points

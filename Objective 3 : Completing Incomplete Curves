@@ -1,0 +1,57 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.interpolate import splprep, splev
+
+# 1. Read the CSV file and organize points into paths
+def read_csv(csv_path):
+    np_path_XYs = np.genfromtxt(csv_path, delimiter=',')
+    path_XYs = []
+    for i in np.unique(np_path_XYs[:, 0]):
+        npXYs = np_path_XYs[np_path_XYs[:, 0] == i][:, 1:]
+        XYs = []
+        for j in np.unique(npXYs[:, 0]):
+            XY = npXYs[npXYs[:, 0] == j][:, 1:]
+            XYs.append(XY)
+        path_XYs.append(XYs)
+    return path_XYs
+
+# 2. Detect gaps in curves
+def detect_gaps(XYs, tolerance=1e-2):
+    gaps = []
+    for i in range(len(XYs) - 1):
+        distance = np.linalg.norm(XYs[i][-1] - XYs[i+1][0])
+        if distance > tolerance:
+            gaps.append((i, i+1))
+    return gaps
+
+# 3. Complete the curves using interpolation
+def complete_curve(XYs):
+    gaps = detect_gaps(XYs)
+    for gap in gaps:
+        start = XYs[gap[0]][-1]
+        end = XYs[gap[1]][0]
+        # Linear interpolation example
+        tck, u = splprep([start[0], end[0]], [start[1], end[1]], s=0)
+        new_points = splev(np.linspace(0, 1, 100), tck)
+        XYs[gap[0]] = np.concatenate([XYs[gap[0]], new_points], axis=0)
+    return XYs
+
+# 4. Visualize the paths
+def plot_paths(path_XYs):
+    fig, ax = plt.subplots(tight_layout=True, figsize=(8, 8))
+    for i, XYs in enumerate(path_XYs):
+        for XY in XYs:
+            ax.plot(XY[:, 0], XY[:, 1], linewidth=2)
+    ax.set_aspect('equal')
+    plt.show()
+
+# Enter the file here: 
+csv_path = 'file_path.csv'  # Update with the actual file path
+paths = read_csv(csv_path)
+
+# Complete the curves and regularize them
+for i in range(len(paths)):
+    paths[i] = complete_curve(paths[i])
+
+# Visualize the completed curves
+plot_paths(paths)
